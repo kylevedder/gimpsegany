@@ -444,12 +444,14 @@ class SAM3Strategy(SegmentationStrategy):
     ):
         pts = []
         with open(selFile, "r") as f:
-            lines = f.readlines()
-            for line in lines:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
                 cos = line.split(" ")
                 pts.append([int(cos[0]), int(cos[1])])
         h, w = cvImage.shape[:2]
-        logging.info(f"SAM3 Selection: image={w}x{h}, imgsz={imgsz}, points={len(pts)}, maskType={maskType}")
+        logging.info(f"SAM3 Selection: image={w}x{h}, imgsz={imgsz}, points={len(pts)}, first={pts[:3]}, maskType={maskType}")
         t0 = time.time()
         results = sam.predict(
             source=self._to_bgr(cvImage),
@@ -602,8 +604,13 @@ def main():
                 scaled_pts = []
                 with open(selFile, "r") as f:
                     for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
                         cos = line.split(" ")
-                        scaled_pts.append(f"{int(int(cos[0]) * _downscale_factor)} {int(int(cos[1]) * _downscale_factor)}")
+                        x = int(int(cos[0]) * _downscale_factor)
+                        y = int(int(cos[1]) * _downscale_factor)
+                        scaled_pts.append(f"{x} {y}")
                 with open(selFile, "w") as f:
                     f.write("\n".join(scaled_pts) + "\n")
                 logging.info(f"Scaled {len(scaled_pts)} selection points")
