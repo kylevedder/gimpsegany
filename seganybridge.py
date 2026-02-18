@@ -48,6 +48,7 @@ SAM3_DEFAULT_CONF = 0.2
 MAX_INPUT_DIM = 2048
 
 _orig_image_size = None  # (h, w) set by main() if image was downscaled
+_downscale_factor = 1.0  # scale factor applied to image
 
 # SAM3 imports (via ultralytics, which includes MPS support)
 try:
@@ -557,14 +558,14 @@ def main():
     h, w = cvImage.shape[:2]
     logging.info(f"Input image: {ipFile} ({w}x{h})")
 
-    global _orig_image_size
+    global _orig_image_size, _downscale_factor
     if max(h, w) > MAX_INPUT_DIM:
-        scale = MAX_INPUT_DIM / max(h, w)
-        new_w = int(w * scale)
-        new_h = int(h * scale)
+        _downscale_factor = MAX_INPUT_DIM / max(h, w)
+        new_w = int(w * _downscale_factor)
+        new_h = int(h * _downscale_factor)
         _orig_image_size = (h, w)
         cvImage = cv2.resize(cvImage, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        logging.info(f"Downscaled to {new_w}x{new_h} (masks will be upscaled back to {w}x{h})")
+        logging.info(f"Downscaled to {new_w}x{new_h} (scale={_downscale_factor:.4f}, masks will be upscaled back to {w}x{h})")
 
     try:
         if segType == "Auto":
@@ -593,11 +594,27 @@ def main():
                 if len(sys.argv) > 9
                 else None
             )
+            if _downscale_factor != 1.0:
+                if boxCos:
+                    boxCos = [c * _downscale_factor for c in boxCos]
+                    logging.info(f"Scaled box coords to {boxCos}")
+                # Scale points in selection file
+                scaled_pts = []
+                with open(selFile, "r") as f:
+                    for line in f:
+                        cos = line.split(" ")
+                        scaled_pts.append(f"{int(int(cos[0]) * _downscale_factor)} {int(int(cos[1]) * _downscale_factor)}")
+                with open(selFile, "w") as f:
+                    f.write("\n".join(scaled_pts) + "\n")
+                logging.info(f"Scaled {len(scaled_pts)} selection points")
             strategy.segment_sel(
                 sam, cvImage, maskType, selFile, boxCos, saveFileNoExt, formatBinary
             )
         elif segType == "Box":
             boxCos = [float(val.strip()) for val in sys.argv[9].split(",")]
+            if _downscale_factor != 1.0:
+                boxCos = [c * _downscale_factor for c in boxCos]
+                logging.info(f"Scaled box coords to {boxCos}")
             strategy.segment_box(
                 sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary
             )
