@@ -27,6 +27,8 @@ import numpy as np
 import cv2
 import sys
 import os
+import time
+import logging
 
 # SAM2 imports
 from sam2.build_sam import build_sam2
@@ -91,10 +93,16 @@ def saveMask(filepath, maskArr, formatBinary):
 
 
 def saveMasks(masks, saveFileNoExt, formatBinary):
+    if not masks or len(masks) == 0:
+        logging.warning("No masks to save")
+        return
     for i, mask in enumerate(masks):
         filepath = saveFileNoExt + str(i) + ".seg"
+        h, w = len(mask), len(mask[0]) if len(mask) > 0 else 0
+        logging.info(f"Saving mask {i}: {w}x{h} -> {filepath}")
         arr = [[val for val in row] for row in mask]
         saveMask(filepath, arr, formatBinary)
+    logging.info(f"Saved {len(masks)} mask(s) total")
 
 
 # --- Strategy Pattern Implementation ---
@@ -405,13 +413,21 @@ class SAM3Strategy(SegmentationStrategy):
         return cv2.cvtColor(cvImage, cv2.COLOR_RGB2BGR)
 
     def segment_auto(self, sam, cvImage, saveFileNoExt, formatBinary, imgsz=SAM3_DEFAULT_IMGSZ, **kwargs):
+        h, w = cvImage.shape[:2]
+        logging.info(f"SAM3 Auto: image={w}x{h}, imgsz={imgsz}")
+        t0 = time.time()
         predictor = self._get_semantic_predictor(imgsz=imgsz)
         predictor.set_image(self._to_bgr(cvImage))
         results = predictor(text=["object"])
+        elapsed = time.time() - t0
         masks = self._extract_masks(results)
+        logging.info(f"SAM3 Auto: {len(masks)} mask(s) in {elapsed:.2f}s")
         saveMasks(masks, saveFileNoExt, formatBinary)
 
     def segment_box(self, sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary, imgsz=SAM3_DEFAULT_IMGSZ):
+        h, w = cvImage.shape[:2]
+        logging.info(f"SAM3 Box: image={w}x{h}, imgsz={imgsz}, box={boxCos}, maskType={maskType}")
+        t0 = time.time()
         results = sam.predict(
             source=self._to_bgr(cvImage),
             bboxes=boxCos,
@@ -419,7 +435,9 @@ class SAM3Strategy(SegmentationStrategy):
             imgsz=imgsz,
             verbose=False,
         )
+        elapsed = time.time() - t0
         masks = self._extract_masks(results)
+        logging.info(f"SAM3 Box: {len(masks)} mask(s) in {elapsed:.2f}s")
         saveMasks(masks, saveFileNoExt, formatBinary)
 
     def segment_sel(
@@ -431,6 +449,9 @@ class SAM3Strategy(SegmentationStrategy):
             for line in lines:
                 cos = line.split(" ")
                 pts.append([int(cos[0]), int(cos[1])])
+        h, w = cvImage.shape[:2]
+        logging.info(f"SAM3 Selection: image={w}x{h}, imgsz={imgsz}, points={len(pts)}, maskType={maskType}")
+        t0 = time.time()
         results = sam.predict(
             source=self._to_bgr(cvImage),
             points=pts,
@@ -439,15 +460,22 @@ class SAM3Strategy(SegmentationStrategy):
             imgsz=imgsz,
             verbose=False,
         )
+        elapsed = time.time() - t0
         masks = self._extract_masks(results)
+        logging.info(f"SAM3 Selection: {len(masks)} mask(s) in {elapsed:.2f}s")
         saveMasks(masks, saveFileNoExt, formatBinary)
 
     def segment_text(self, sam, cvImage, saveFileNoExt, formatBinary, textPrompt, imgsz=SAM3_DEFAULT_IMGSZ):
+        prompts = [p.strip() for p in textPrompt.split(",") if p.strip()]
+        h, w = cvImage.shape[:2]
+        logging.info(f"SAM3 Text: image={w}x{h}, imgsz={imgsz}, prompts={prompts}")
+        t0 = time.time()
         predictor = self._get_semantic_predictor(imgsz=imgsz)
         predictor.set_image(self._to_bgr(cvImage))
-        prompts = [p.strip() for p in textPrompt.split(",") if p.strip()]
         results = predictor(text=prompts)
+        elapsed = time.time() - t0
         masks = self._extract_masks(results)
+        logging.info(f"SAM3 Text: {len(masks)} mask(s) in {elapsed:.2f}s")
         saveMasks(masks, saveFileNoExt, formatBinary)
 
     def run_test(self, sam):
@@ -459,6 +487,13 @@ class SAM3Strategy(SegmentationStrategy):
 
 
 def main():
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    logging.info(f"seganybridge args: {sys.argv[1:]}")
+
     if len(sys.argv) < 3:
         print(
             "Usage: python seganybridge.py <model_type|auto> <checkpoint_path> [options]"
@@ -496,9 +531,11 @@ def main():
         print(f"Error: Checkpoint file not found: {checkPtFilePath}")
         return
 
+    t0 = time.time()
     sam = strategy.load_model(checkPtFilePath, modelType)
     if sam is None:
         return
+    logging.info(f"Model loaded in {time.time() - t0:.2f}s")
 
     if not isinstance(strategy, SAM3Strategy):
         if torch.cuda.is_available():
@@ -519,6 +556,8 @@ def main():
 
     cvImage = cv2.imread(ipFile)
     cvImage = cv2.cvtColor(cvImage, cv2.COLOR_BGR2RGB)
+    h, w = cvImage.shape[:2]
+    logging.info(f"Input image: {ipFile} ({w}x{h})")
 
     try:
         if segType == "Auto":

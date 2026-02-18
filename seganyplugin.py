@@ -722,10 +722,13 @@ def run_segmentation(image, values):
     config = procedure.create_config()
     config.set_property("image", image)
     procedure.run(config)
+
+    logging.info("Bridge command: %s", " ".join(cmd))
     shellRun(cmd)
 
     layerMaskColor = None if values.isRandomColor else values.maskColor
-    createLayers(image, maskFileNoExt, layerMaskColor, formatBinary, values)
+    layerCount = createLayers(image, maskFileNoExt, layerMaskColor, formatBinary, values)
+    logging.info("Created %d mask layer(s) for segType=%s, modelType=%s", layerCount, values.segType, values.modelType)
     cleanup(filepathPrefix)
 
     if channel is not None:
