@@ -40,15 +40,13 @@ from segment_anything import (
     SamPredictor,
 )
 
-# SAM3 imports
+# SAM3 imports (via ultralytics, which includes MPS support)
 try:
-    from sam3 import build_sam3_image_model
-    from sam3.model.sam3_image_processor import Sam3Processor
+    from ultralytics import SAM as UltralyticsSAM
+    from ultralytics.models.sam import SAM3SemanticPredictor
     HAS_SAM3 = True
 except ImportError:
     HAS_SAM3 = False
-
-from PIL import Image
 
 # --- Utility Functions ---
 
@@ -346,7 +344,9 @@ class SAM3Strategy(SegmentationStrategy):
     MODEL_TYPE_LOOKUP = {"sam3": "sam3"}
 
     def __init__(self):
-        self._processor = None
+        self._semantic_predictor = None
+        self._device = None
+        self._checkpoint_path = None
 
     def get_model_type_from_filename(self, model_filename):
         filename_stem = os.path.splitext(model_filename)[0]
@@ -366,43 +366,52 @@ class SAM3Strategy(SegmentationStrategy):
             device = "mps"
         else:
             device = "cpu"
+        self._device = device
+        self._checkpoint_path = checkPtFilePath
         try:
-            model = build_sam3_image_model(
-                device=device,
-                enable_inst_interactivity=True,
-                checkpoint_path=checkPtFilePath,
-                load_from_HF=False,
-            )
-            self._processor = Sam3Processor(model)
-            print("SAM3 Model loaded successfully!")
+            model = UltralyticsSAM(checkPtFilePath)
+            print(f"SAM3 Model loaded successfully! (device: {device})")
             return model
         except Exception as e:
             print(f"Error loading SAM3 model: {e}")
             return None
 
-    def _set_image(self, cvImage):
-        pil_image = Image.fromarray(cvImage)
-        state = self._processor.set_image(pil_image)
-        return state
+    def _get_semantic_predictor(self):
+        if self._semantic_predictor is None:
+            overrides = dict(
+                conf=0.25,
+                task="segment",
+                mode="predict",
+                model=self._checkpoint_path,
+                device=self._device,
+                verbose=False,
+            )
+            self._semantic_predictor = SAM3SemanticPredictor(overrides=overrides)
+        return self._semantic_predictor
+
+    def _extract_masks(self, results):
+        if not results or results[0].masks is None:
+            return []
+        return results[0].masks.data.cpu().numpy()
+
+    def _to_bgr(self, cvImage):
+        return cv2.cvtColor(cvImage, cv2.COLOR_RGB2BGR)
 
     def segment_auto(self, sam, cvImage, saveFileNoExt, formatBinary, **kwargs):
-        state = self._set_image(cvImage)
-        result = self._processor.set_text_prompt(state, prompt="object")
-        masks = result["masks"]
-        if hasattr(masks, "cpu"):
-            masks = masks.cpu().numpy()
-        if masks.ndim == 4:
-            masks = masks.squeeze(1)
+        predictor = self._get_semantic_predictor()
+        predictor.set_image(self._to_bgr(cvImage))
+        results = predictor(text=["object"])
+        masks = self._extract_masks(results)
         saveMasks(masks, saveFileNoExt, formatBinary)
 
     def segment_box(self, sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary):
-        state = self._set_image(cvImage)
-        input_box = np.array(boxCos)
-        masks, _, _ = sam.predict_inst(
-            state,
-            box=input_box,
-            multimask_output=(maskType == "Multiple"),
+        results = sam.predict(
+            source=self._to_bgr(cvImage),
+            bboxes=boxCos,
+            device=self._device,
+            verbose=False,
         )
+        masks = self._extract_masks(results)
         saveMasks(masks, saveFileNoExt, formatBinary)
 
     def segment_sel(
@@ -414,34 +423,29 @@ class SAM3Strategy(SegmentationStrategy):
             for line in lines:
                 cos = line.split(" ")
                 pts.append([int(cos[0]), int(cos[1])])
-        state = self._set_image(cvImage)
-        input_point = np.array(pts)
-        input_label = np.array([1] * len(input_point))
-        input_box = np.array(boxCos) if boxCos else None
-        masks, _, _ = sam.predict_inst(
-            state,
-            point_coords=input_point,
-            point_labels=input_label,
-            box=input_box,
-            multimask_output=(maskType == "Multiple"),
+        results = sam.predict(
+            source=self._to_bgr(cvImage),
+            points=pts,
+            labels=[1] * len(pts),
+            device=self._device,
+            verbose=False,
         )
+        masks = self._extract_masks(results)
         saveMasks(masks, saveFileNoExt, formatBinary)
 
     def segment_text(self, sam, cvImage, saveFileNoExt, formatBinary, textPrompt):
-        state = self._set_image(cvImage)
-        result = self._processor.set_text_prompt(state, prompt=textPrompt)
-        masks = result["masks"]
-        if hasattr(masks, "cpu"):
-            masks = masks.cpu().numpy()
-        if masks.ndim == 4:
-            masks = masks.squeeze(1)
+        predictor = self._get_semantic_predictor()
+        predictor.set_image(self._to_bgr(cvImage))
+        prompts = [p.strip() for p in textPrompt.split(",") if p.strip()]
+        results = predictor(text=prompts)
+        masks = self._extract_masks(results)
         saveMasks(masks, saveFileNoExt, formatBinary)
 
     def run_test(self, sam):
-        pil_image = Image.new("RGB", (50, 50), color=(0, 0, 0))
-        state = self._processor.set_image(pil_image)
-        input_box = np.array([10, 10, 20, 20])
-        sam.predict_inst(state, box=input_box, multimask_output=False)
+        npArr = np.zeros((50, 50, 3), np.uint8)
+        sam.predict(
+            source=npArr, bboxes=[10, 10, 20, 20], device=self._device, verbose=False
+        )
 
 
 def main():
