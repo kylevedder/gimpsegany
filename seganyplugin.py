@@ -374,12 +374,19 @@ def shellRun(cmdArgs, stdoutFile=None, env_vars=None, useos=False):
                     )
             process.wait()
 
-            if process.returncode != 0:
-                error_message = "Command failed with the following error:\n "
-                error_lines = [
+            # Always capture stderr for logging
+            if process.stderr:
+                stderr_lines = [
                     line.decode("utf-8") for line in iter(process.stderr.readline, b"")
                 ]
-                logging.error(error_message + "".join(error_lines))
+                stderr_text = "".join(stderr_lines).rstrip()
+                if stderr_text:
+                    if process.returncode != 0:
+                        logging.error("Bridge stderr:\n%s" % stderr_text)
+                    else:
+                        logging.info("Bridge output:\n%s" % stderr_text)
+
+            if process.returncode != 0:
                 return False
 
         finally:
@@ -597,11 +604,18 @@ def validateOptions(image, values):
     return True
 
 
+def getLogFilePath():
+    scriptDir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(scriptDir, "segany.log")
+
+
 def configLogging(level):
     logging.basicConfig(
         level=level,
         format="%(asctime)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
+        filename=getLogFilePath(),
+        filemode="a",
     )
 
 
