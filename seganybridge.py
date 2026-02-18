@@ -110,12 +110,15 @@ class SegmentationStrategy:
     def segment_auto(self, sam, cvImage, saveFileNoExt, formatBinary, **kwargs):
         raise NotImplementedError
 
-    def segment_box(self, sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary):
+    def segment_box(self, sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary, imgsz=SAM3_DEFAULT_IMGSZ):
         raise NotImplementedError
 
     def segment_sel(
-        self, sam, cvImage, maskType, selFile, boxCos, saveFileNoExt, formatBinary
+        self, sam, cvImage, maskType, selFile, boxCos, saveFileNoExt, formatBinary, imgsz=SAM3_DEFAULT_IMGSZ
     ):
+        raise NotImplementedError
+
+    def segment_text(self, sam, cvImage, saveFileNoExt, formatBinary, textPrompt, imgsz=SAM3_DEFAULT_IMGSZ):
         raise NotImplementedError
 
     def run_test(self, sam):
@@ -162,7 +165,7 @@ class SAM1Strategy(SegmentationStrategy):
         masks = [mask["segmentation"] for mask in masks]
         saveMasks(masks, saveFileNoExt, formatBinary)
 
-    def segment_box(self, sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary):
+    def segment_box(self, sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary, imgsz=SAM3_DEFAULT_IMGSZ):
         predictor = SamPredictor(sam)
         predictor.set_image(cvImage)
         input_box = np.array(boxCos)
@@ -175,7 +178,7 @@ class SAM1Strategy(SegmentationStrategy):
         saveMasks(masks, saveFileNoExt, formatBinary)
 
     def segment_sel(
-        self, sam, cvImage, maskType, selFile, boxCos, saveFileNoExt, formatBinary
+        self, sam, cvImage, maskType, selFile, boxCos, saveFileNoExt, formatBinary, imgsz=SAM3_DEFAULT_IMGSZ
     ):
         pts = []
         with open(selFile, "r") as f:
@@ -292,7 +295,7 @@ class SAM2Strategy(SegmentationStrategy):
         masks = [mask["segmentation"] for mask in masks]
         saveMasks(masks, saveFileNoExt, formatBinary)
 
-    def segment_box(self, sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary):
+    def segment_box(self, sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary, imgsz=SAM3_DEFAULT_IMGSZ):
         predictor = SAM2ImagePredictor(sam)
         predictor.set_image(cvImage)
         input_box = np.array(boxCos)
@@ -305,7 +308,7 @@ class SAM2Strategy(SegmentationStrategy):
         saveMasks(masks, saveFileNoExt, formatBinary)
 
     def segment_sel(
-        self, sam, cvImage, maskType, selFile, boxCos, saveFileNoExt, formatBinary
+        self, sam, cvImage, maskType, selFile, boxCos, saveFileNoExt, formatBinary, imgsz=SAM3_DEFAULT_IMGSZ
     ):
         pts = []
         with open(selFile, "r") as f:
@@ -401,27 +404,26 @@ class SAM3Strategy(SegmentationStrategy):
     def _to_bgr(self, cvImage):
         return cv2.cvtColor(cvImage, cv2.COLOR_RGB2BGR)
 
-    def segment_auto(self, sam, cvImage, saveFileNoExt, formatBinary, **kwargs):
-        imgsz = kwargs.get("imgsz", SAM3_DEFAULT_IMGSZ)
+    def segment_auto(self, sam, cvImage, saveFileNoExt, formatBinary, imgsz=SAM3_DEFAULT_IMGSZ, **kwargs):
         predictor = self._get_semantic_predictor(imgsz=imgsz)
         predictor.set_image(self._to_bgr(cvImage))
         results = predictor(text=["object"])
         masks = self._extract_masks(results)
         saveMasks(masks, saveFileNoExt, formatBinary)
 
-    def segment_box(self, sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary):
+    def segment_box(self, sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary, imgsz=SAM3_DEFAULT_IMGSZ):
         results = sam.predict(
             source=self._to_bgr(cvImage),
             bboxes=boxCos,
             device=self._device,
-            imgsz=SAM3_DEFAULT_IMGSZ,
+            imgsz=imgsz,
             verbose=False,
         )
         masks = self._extract_masks(results)
         saveMasks(masks, saveFileNoExt, formatBinary)
 
     def segment_sel(
-        self, sam, cvImage, maskType, selFile, boxCos, saveFileNoExt, formatBinary
+        self, sam, cvImage, maskType, selFile, boxCos, saveFileNoExt, formatBinary, imgsz=SAM3_DEFAULT_IMGSZ
     ):
         pts = []
         with open(selFile, "r") as f:
@@ -434,7 +436,7 @@ class SAM3Strategy(SegmentationStrategy):
             points=pts,
             labels=[1] * len(pts),
             device=self._device,
-            imgsz=SAM3_DEFAULT_IMGSZ,
+            imgsz=imgsz,
             verbose=False,
         )
         masks = self._extract_masks(results)
@@ -521,9 +523,10 @@ def main():
     try:
         if segType == "Auto":
             auto_kwargs = {}
+            imgsz = SAM3_DEFAULT_IMGSZ
             if isinstance(strategy, SAM3Strategy):
                 if len(sys.argv) > 8:
-                    auto_kwargs["imgsz"] = int(sys.argv[8])
+                    imgsz = int(sys.argv[8])
             elif isinstance(strategy, SAM2Strategy):
                 if len(sys.argv) > 8:
                     auto_kwargs["segRes"] = sys.argv[8]
@@ -532,7 +535,7 @@ def main():
                 if len(sys.argv) > 10:
                     auto_kwargs["minMaskArea"] = int(sys.argv[10])
             strategy.segment_auto(
-                sam, cvImage, saveFileNoExt, formatBinary, **auto_kwargs
+                sam, cvImage, saveFileNoExt, formatBinary, imgsz, **auto_kwargs
             )
         elif segType in {"Selection", "Box-Selection"}:
             selFile = sys.argv[8]
@@ -553,7 +556,7 @@ def main():
             textPrompt = sys.argv[8]
             imgsz = int(sys.argv[9]) if len(sys.argv) > 9 else SAM3_DEFAULT_IMGSZ
             strategy.segment_text(
-                sam, cvImage, saveFileNoExt, formatBinary, textPrompt, imgsz=imgsz
+                sam, cvImage, saveFileNoExt, formatBinary, textPrompt, imgsz
             )
         else:
             print(f"Unknown segmentation type: {segType}")
