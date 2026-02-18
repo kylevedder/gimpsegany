@@ -48,6 +48,7 @@ class DialogValue:
         self.segRes = "Medium"
         self.cropNLayers = 0
         self.minMaskArea = 0
+        self.textPrompt = ""
 
         try:
             with open(filepath, "r") as f:
@@ -63,6 +64,7 @@ class DialogValue:
                 self.segRes = data.get("segRes", self.segRes)
                 self.cropNLayers = data.get("cropNLayers", self.cropNLayers)
                 self.minMaskArea = data.get("minMaskArea", self.minMaskArea)
+                self.textPrompt = data.get("textPrompt", self.textPrompt)
         except Exception as e:
             logging.info("Error reading json : %s" % e)
 
@@ -79,6 +81,7 @@ class DialogValue:
             "segRes": self.segRes,
             "cropNLayers": self.cropNLayers,
             "minMaskArea": self.minMaskArea,
+            "textPrompt": self.textPrompt,
         }
         with open(filepath, "w") as f:
             json.dump(data, f)
@@ -130,6 +133,7 @@ class OptionsDialog(Gtk.Dialog):
             "sam2_hiera_base_plus (SAM2)",
             "sam2_hiera_small (SAM2)",
             "sam2_hiera_tiny (SAM2)",
+            "sam3 (SAM3)",
         ]
         for value in self.modelTypeVals:
             self.modelTypeDropDown.append_text(value)
@@ -158,7 +162,7 @@ class OptionsDialog(Gtk.Dialog):
         # Segmentation Type
         segTypeLbl = Gtk.Label(label="Segmentation Type:", xalign=1)
         self.segTypeDropDown = Gtk.ComboBoxText()
-        self.segTypeVals = ["Auto", "Box", "Selection"]
+        self.segTypeVals = ["Auto", "Box", "Selection", "Text"]
         for value in self.segTypeVals:
             self.segTypeDropDown.append_text(value)
         self.segTypeDropDown.set_active(self.segTypeVals.index(self.values.segType))
@@ -182,6 +186,14 @@ class OptionsDialog(Gtk.Dialog):
         grid.attach(self.selPtsLbl, 0, 5, 1, 1)
         grid.attach(self.selPtsEntry, 1, 5, 1, 1)
 
+        # Text Prompt (SAM3)
+        self.textPromptLbl = Gtk.Label(label="Text Prompt:", xalign=1)
+        self.textPromptEntry = Gtk.Entry()
+        self.textPromptEntry.set_text(self.values.textPrompt)
+        self.textPromptEntry.set_placeholder_text("e.g. person, car, dog...")
+        grid.attach(self.textPromptLbl, 0, 6, 1, 1)
+        grid.attach(self.textPromptEntry, 1, 6, 1, 1)
+
         # SAM2 Specific Auto-Segmentation Options
         self.segResLbl = Gtk.Label(label="Segmentation Resolution:", xalign=1)
         self.segResDropDown = Gtk.ComboBoxText()
@@ -189,26 +201,26 @@ class OptionsDialog(Gtk.Dialog):
         for value in self.segResVals:
             self.segResDropDown.append_text(value)
         self.segResDropDown.set_active(self.segResVals.index(self.values.segRes))
-        grid.attach(self.segResLbl, 0, 6, 1, 1)
-        grid.attach(self.segResDropDown, 1, 6, 1, 1)
+        grid.attach(self.segResLbl, 0, 7, 1, 1)
+        grid.attach(self.segResDropDown, 1, 7, 1, 1)
 
         self.cropNLayersLbl = Gtk.Label(label="Crop n Layers:", xalign=1)
         self.cropNLayersChk = Gtk.CheckButton()
         self.cropNLayersChk.set_active(self.values.cropNLayers > 0)
-        grid.attach(self.cropNLayersLbl, 0, 7, 1, 1)
-        grid.attach(self.cropNLayersChk, 1, 7, 1, 1)
+        grid.attach(self.cropNLayersLbl, 0, 8, 1, 1)
+        grid.attach(self.cropNLayersChk, 1, 8, 1, 1)
 
         self.minMaskAreaLbl = Gtk.Label(label="Minimum Mask Area:", xalign=1)
         self.minMaskAreaEntry = Gtk.Entry()
         self.minMaskAreaEntry.set_text(str(self.values.minMaskArea))
-        grid.attach(self.minMaskAreaLbl, 0, 8, 1, 1)
-        grid.attach(self.minMaskAreaEntry, 1, 8, 1, 1)
+        grid.attach(self.minMaskAreaLbl, 0, 9, 1, 1)
+        grid.attach(self.minMaskAreaEntry, 1, 9, 1, 1)
 
         # Mask Color
         if not self.isGrayScale:
             self.randColBtn = Gtk.CheckButton(label="Random Mask Color")
             self.randColBtn.set_active(self.values.isRandomColor)
-            grid.attach(self.randColBtn, 1, 9, 1, 1)
+            grid.attach(self.randColBtn, 1, 10, 1, 1)
 
             self.maskColorLbl = Gtk.Label(label="Mask Color:", xalign=1)
             self.maskColorBtn = Gtk.ColorButton()
@@ -217,8 +229,8 @@ class OptionsDialog(Gtk.Dialog):
                 f"rgb({self.values.maskColor[0]},{self.values.maskColor[1]},{self.values.maskColor[2]})"
             )
             self.maskColorBtn.set_rgba(rgba)
-            grid.attach(self.maskColorLbl, 0, 10, 1, 1)
-            grid.attach(self.maskColorBtn, 1, 10, 1, 1)
+            grid.attach(self.maskColorLbl, 0, 11, 1, 1)
+            grid.attach(self.maskColorBtn, 1, 11, 1, 1)
 
         self.connect("map-event", self.on_map_event)
         self.segTypeDropDown.connect("changed", self.update_options_visibility)
@@ -245,13 +257,26 @@ class OptionsDialog(Gtk.Dialog):
         isSam1_by_type = "(SAM1)" in modelType
         isSam1 = isSam1_by_filename or isSam1_by_type
 
+        # Determine if SAM3 is being used
+        isSam3_by_filename = (
+            modelType == "Auto"
+            and checkpoint_path
+            and os.path.basename(checkpoint_path).lower().startswith("sam3")
+        )
+        isSam3_by_type = "(SAM3)" in modelType
+        isSam3 = isSam3_by_filename or isSam3_by_type
+
         self.selPtsLbl.set_visible(segType in ["Selection"])
         self.selPtsEntry.set_visible(segType in ["Selection"])
-        self.maskTypeLbl.set_visible(segType not in ["Auto"])
-        self.maskTypeDropDown.set_visible(segType not in ["Auto"])
+        self.maskTypeLbl.set_visible(segType not in ["Auto", "Text"])
+        self.maskTypeDropDown.set_visible(segType not in ["Auto", "Text"])
 
-        # Show SAM2-specific options only for Auto mode and not SAM1
-        show_sam2_options = isAuto and not isSam1
+        # Show text prompt only for Text segmentation mode
+        self.textPromptLbl.set_visible(segType == "Text")
+        self.textPromptEntry.set_visible(segType == "Text")
+
+        # Show SAM2-specific options only for Auto mode and not SAM1 or SAM3
+        show_sam2_options = isAuto and not isSam1 and not isSam3
         self.segResLbl.set_visible(show_sam2_options)
         self.segResDropDown.set_visible(show_sam2_options)
         self.cropNLayersLbl.set_visible(show_sam2_options)
@@ -288,6 +313,7 @@ class OptionsDialog(Gtk.Dialog):
                 255,
             ]
         self.values.selPtCnt = int(self.selPtsEntry.get_text())
+        self.values.textPrompt = self.textPromptEntry.get_text()
         self.values.segRes = self.segResVals[self.segResDropDown.get_active()]
         self.values.cropNLayers = 1 if self.cropNLayersChk.get_active() else 0
         self.values.minMaskArea = int(self.minMaskAreaEntry.get_text())
@@ -550,6 +576,9 @@ def validateOptions(image, values):
                 + "to select an area on the image"
             )
             return False
+    if values.segType == "Text" and not values.textPrompt.strip():
+        showError("Text Prompt is empty! Please enter a text prompt for segmentation.")
+        return False
     return True
 
 
@@ -606,8 +635,7 @@ def run_segmentation(image, values):
     ]
 
     if values.segType == "Auto":
-        # Only add SAM2-specific args if the model is not SAM1
-        # The bridge script knows to ignore them, but this is cleaner.
+        # Only add SAM2-specific args if the model is not SAM1 or SAM3
         isSam1_by_type = values.modelType in ["vit_h", "vit_l", "vit_b"]
         isSam1_by_filename = (
             values.modelType == "auto"
@@ -615,10 +643,19 @@ def run_segmentation(image, values):
             and os.path.basename(values.checkPtPath).lower().startswith("sam_")
         )
         isSam1 = isSam1_by_type or isSam1_by_filename
-        if not isSam1:
+        isSam3_by_type = values.modelType == "sam3"
+        isSam3_by_filename = (
+            values.modelType == "auto"
+            and values.checkPtPath
+            and os.path.basename(values.checkPtPath).lower().startswith("sam3")
+        )
+        isSam3 = isSam3_by_type or isSam3_by_filename
+        if not isSam1 and not isSam3:
             cmd.extend(
                 [values.segRes, str(values.cropNLayers), str(values.minMaskArea)]
             )
+    elif values.segType == "Text":
+        cmd.append(values.textPrompt)
 
     newImage = image.duplicate()
     visLayer = newImage.merge_visible_layers(Gimp.MergeType.CLIP_TO_IMAGE)

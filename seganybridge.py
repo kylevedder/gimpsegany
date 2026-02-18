@@ -40,6 +40,16 @@ from segment_anything import (
     SamPredictor,
 )
 
+# SAM3 imports
+try:
+    from sam3 import build_sam3_image_model
+    from sam3.model.sam3_image_processor import Sam3Processor
+    HAS_SAM3 = True
+except ImportError:
+    HAS_SAM3 = False
+
+from PIL import Image
+
 # --- Utility Functions ---
 
 
@@ -332,6 +342,108 @@ class SAM2Strategy(SegmentationStrategy):
             print(f"Removed temporary file: {self._temp_pth_path}")
 
 
+class SAM3Strategy(SegmentationStrategy):
+    MODEL_TYPE_LOOKUP = {"sam3": "sam3"}
+
+    def __init__(self):
+        self._processor = None
+
+    def get_model_type_from_filename(self, model_filename):
+        filename_stem = os.path.splitext(model_filename)[0]
+        if filename_stem.lower().startswith("sam3"):
+            print("Auto-detected SAM3 model type: sam3")
+            return "sam3"
+        else:
+            print(
+                f"Error: Could not auto-detect model type from SAM3 filename: {model_filename}"
+            )
+            return None
+
+    def load_model(self, checkPtFilePath, modelType):
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+        try:
+            model = build_sam3_image_model(
+                device=device,
+                enable_inst_interactivity=True,
+                checkpoint_path=checkPtFilePath,
+                load_from_HF=False,
+            )
+            self._processor = Sam3Processor(model)
+            print("SAM3 Model loaded successfully!")
+            return model
+        except Exception as e:
+            print(f"Error loading SAM3 model: {e}")
+            return None
+
+    def _set_image(self, cvImage):
+        pil_image = Image.fromarray(cvImage)
+        state = self._processor.set_image(pil_image)
+        return state
+
+    def segment_auto(self, sam, cvImage, saveFileNoExt, formatBinary, **kwargs):
+        state = self._set_image(cvImage)
+        result = self._processor.set_text_prompt(state, prompt="object")
+        masks = result["masks"]
+        if hasattr(masks, "cpu"):
+            masks = masks.cpu().numpy()
+        if masks.ndim == 4:
+            masks = masks.squeeze(1)
+        saveMasks(masks, saveFileNoExt, formatBinary)
+
+    def segment_box(self, sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary):
+        state = self._set_image(cvImage)
+        input_box = np.array(boxCos)
+        masks, _, _ = sam.predict_inst(
+            state,
+            box=input_box,
+            multimask_output=(maskType == "Multiple"),
+        )
+        saveMasks(masks, saveFileNoExt, formatBinary)
+
+    def segment_sel(
+        self, sam, cvImage, maskType, selFile, boxCos, saveFileNoExt, formatBinary
+    ):
+        pts = []
+        with open(selFile, "r") as f:
+            lines = f.readlines()
+            for line in lines:
+                cos = line.split(" ")
+                pts.append([int(cos[0]), int(cos[1])])
+        state = self._set_image(cvImage)
+        input_point = np.array(pts)
+        input_label = np.array([1] * len(input_point))
+        input_box = np.array(boxCos) if boxCos else None
+        masks, _, _ = sam.predict_inst(
+            state,
+            point_coords=input_point,
+            point_labels=input_label,
+            box=input_box,
+            multimask_output=(maskType == "Multiple"),
+        )
+        saveMasks(masks, saveFileNoExt, formatBinary)
+
+    def segment_text(self, sam, cvImage, saveFileNoExt, formatBinary, textPrompt):
+        state = self._set_image(cvImage)
+        result = self._processor.set_text_prompt(state, prompt=textPrompt)
+        masks = result["masks"]
+        if hasattr(masks, "cpu"):
+            masks = masks.cpu().numpy()
+        if masks.ndim == 4:
+            masks = masks.squeeze(1)
+        saveMasks(masks, saveFileNoExt, formatBinary)
+
+    def run_test(self, sam):
+        pil_image = Image.new("RGB", (50, 50), color=(0, 0, 0))
+        state = self._processor.set_image(pil_image)
+        input_box = np.array([10, 10, 20, 20])
+        sam.predict_inst(state, box=input_box, multimask_output=False)
+
+
 def main():
     if len(sys.argv) < 3:
         print(
@@ -347,11 +459,18 @@ def main():
         strategy = SAM1Strategy()
     elif model_filename.lower().startswith("sam2"):
         strategy = SAM2Strategy()
+    elif model_filename.lower().startswith("sam3"):
+        if not HAS_SAM3:
+            print("Error: sam3 package not installed")
+            return
+        strategy = SAM3Strategy()
     else:
         print(
             f"Error: Could not determine model family from filename: {model_filename}"
         )
-        print("Filename must start with 'sam_' for SAM1 or 'sam2' for SAM2.")
+        print(
+            "Filename must start with 'sam_' for SAM1, 'sam2' for SAM2, or 'sam3' for SAM3."
+        )
         return
 
     if modelType.lower() == "auto":
@@ -367,9 +486,10 @@ def main():
     if sam is None:
         return
 
-    if torch.cuda.is_available():
-        sam.to(device="cuda")
-        print("Model moved to CUDA")
+    if not isinstance(strategy, SAM3Strategy):
+        if torch.cuda.is_available():
+            sam.to(device="cuda")
+            print("Model moved to CUDA")
 
     if len(sys.argv) == 3:
         strategy.run_test(sam)
@@ -389,7 +509,7 @@ def main():
     try:
         if segType == "Auto":
             auto_kwargs = {}
-            if isinstance(strategy, SAM2Strategy):
+            if isinstance(strategy, (SAM2Strategy, SAM3Strategy)):
                 if len(sys.argv) > 8:
                     auto_kwargs["segRes"] = sys.argv[8]
                 if len(sys.argv) > 9:
@@ -413,6 +533,11 @@ def main():
             boxCos = [float(val.strip()) for val in sys.argv[9].split(",")]
             strategy.segment_box(
                 sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary
+            )
+        elif segType == "Text":
+            textPrompt = sys.argv[8]
+            strategy.segment_text(
+                sam, cvImage, saveFileNoExt, formatBinary, textPrompt
             )
         else:
             print(f"Unknown segmentation type: {segType}")
