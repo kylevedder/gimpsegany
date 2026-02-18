@@ -49,6 +49,7 @@ class DialogValue:
         self.cropNLayers = 0
         self.minMaskArea = 0
         self.textPrompt = ""
+        self.sam3ImgSize = 1024
 
         try:
             with open(filepath, "r") as f:
@@ -65,6 +66,7 @@ class DialogValue:
                 self.cropNLayers = data.get("cropNLayers", self.cropNLayers)
                 self.minMaskArea = data.get("minMaskArea", self.minMaskArea)
                 self.textPrompt = data.get("textPrompt", self.textPrompt)
+                self.sam3ImgSize = data.get("sam3ImgSize", self.sam3ImgSize)
         except Exception as e:
             logging.info("Error reading json : %s" % e)
 
@@ -82,6 +84,7 @@ class DialogValue:
             "cropNLayers": self.cropNLayers,
             "minMaskArea": self.minMaskArea,
             "textPrompt": self.textPrompt,
+            "sam3ImgSize": self.sam3ImgSize,
         }
         with open(filepath, "w") as f:
             json.dump(data, f)
@@ -194,6 +197,13 @@ class OptionsDialog(Gtk.Dialog):
         grid.attach(self.textPromptLbl, 0, 6, 1, 1)
         grid.attach(self.textPromptEntry, 1, 6, 1, 1)
 
+        # SAM3 Image Size
+        self.sam3ImgSizeLbl = Gtk.Label(label="Image Size:", xalign=1)
+        self.sam3ImgSizeEntry = Gtk.Entry()
+        self.sam3ImgSizeEntry.set_text(str(self.values.sam3ImgSize))
+        grid.attach(self.sam3ImgSizeLbl, 0, 7, 1, 1)
+        grid.attach(self.sam3ImgSizeEntry, 1, 7, 1, 1)
+
         # SAM2 Specific Auto-Segmentation Options
         self.segResLbl = Gtk.Label(label="Segmentation Resolution:", xalign=1)
         self.segResDropDown = Gtk.ComboBoxText()
@@ -201,26 +211,26 @@ class OptionsDialog(Gtk.Dialog):
         for value in self.segResVals:
             self.segResDropDown.append_text(value)
         self.segResDropDown.set_active(self.segResVals.index(self.values.segRes))
-        grid.attach(self.segResLbl, 0, 7, 1, 1)
-        grid.attach(self.segResDropDown, 1, 7, 1, 1)
+        grid.attach(self.segResLbl, 0, 8, 1, 1)
+        grid.attach(self.segResDropDown, 1, 8, 1, 1)
 
         self.cropNLayersLbl = Gtk.Label(label="Crop n Layers:", xalign=1)
         self.cropNLayersChk = Gtk.CheckButton()
         self.cropNLayersChk.set_active(self.values.cropNLayers > 0)
-        grid.attach(self.cropNLayersLbl, 0, 8, 1, 1)
-        grid.attach(self.cropNLayersChk, 1, 8, 1, 1)
+        grid.attach(self.cropNLayersLbl, 0, 9, 1, 1)
+        grid.attach(self.cropNLayersChk, 1, 9, 1, 1)
 
         self.minMaskAreaLbl = Gtk.Label(label="Minimum Mask Area:", xalign=1)
         self.minMaskAreaEntry = Gtk.Entry()
         self.minMaskAreaEntry.set_text(str(self.values.minMaskArea))
-        grid.attach(self.minMaskAreaLbl, 0, 9, 1, 1)
-        grid.attach(self.minMaskAreaEntry, 1, 9, 1, 1)
+        grid.attach(self.minMaskAreaLbl, 0, 10, 1, 1)
+        grid.attach(self.minMaskAreaEntry, 1, 10, 1, 1)
 
         # Mask Color
         if not self.isGrayScale:
             self.randColBtn = Gtk.CheckButton(label="Random Mask Color")
             self.randColBtn.set_active(self.values.isRandomColor)
-            grid.attach(self.randColBtn, 1, 10, 1, 1)
+            grid.attach(self.randColBtn, 1, 11, 1, 1)
 
             self.maskColorLbl = Gtk.Label(label="Mask Color:", xalign=1)
             self.maskColorBtn = Gtk.ColorButton()
@@ -229,8 +239,8 @@ class OptionsDialog(Gtk.Dialog):
                 f"rgb({self.values.maskColor[0]},{self.values.maskColor[1]},{self.values.maskColor[2]})"
             )
             self.maskColorBtn.set_rgba(rgba)
-            grid.attach(self.maskColorLbl, 0, 11, 1, 1)
-            grid.attach(self.maskColorBtn, 1, 11, 1, 1)
+            grid.attach(self.maskColorLbl, 0, 12, 1, 1)
+            grid.attach(self.maskColorBtn, 1, 12, 1, 1)
 
         self.connect("map-event", self.on_map_event)
         self.segTypeDropDown.connect("changed", self.update_options_visibility)
@@ -275,6 +285,10 @@ class OptionsDialog(Gtk.Dialog):
         self.textPromptLbl.set_visible(segType == "Text")
         self.textPromptEntry.set_visible(segType == "Text")
 
+        # Show SAM3-specific options when SAM3 is detected
+        self.sam3ImgSizeLbl.set_visible(isSam3)
+        self.sam3ImgSizeEntry.set_visible(isSam3)
+
         # Show SAM2-specific options only for Auto mode and not SAM1 or SAM3
         show_sam2_options = isAuto and not isSam1 and not isSam3
         self.segResLbl.set_visible(show_sam2_options)
@@ -314,6 +328,7 @@ class OptionsDialog(Gtk.Dialog):
             ]
         self.values.selPtCnt = int(self.selPtsEntry.get_text())
         self.values.textPrompt = self.textPromptEntry.get_text()
+        self.values.sam3ImgSize = int(self.sam3ImgSizeEntry.get_text())
         self.values.segRes = self.segResVals[self.segResDropDown.get_active()]
         self.values.cropNLayers = 1 if self.cropNLayersChk.get_active() else 0
         self.values.minMaskArea = int(self.minMaskAreaEntry.get_text())
@@ -654,8 +669,11 @@ def run_segmentation(image, values):
             cmd.extend(
                 [values.segRes, str(values.cropNLayers), str(values.minMaskArea)]
             )
+        if isSam3:
+            cmd.append(str(values.sam3ImgSize))
     elif values.segType == "Text":
         cmd.append(values.textPrompt)
+        cmd.append(str(values.sam3ImgSize))
 
     newImage = image.duplicate()
     visLayer = newImage.merge_visible_layers(Gimp.MergeType.CLIP_TO_IMAGE)

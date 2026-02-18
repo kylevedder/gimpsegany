@@ -376,13 +376,13 @@ class SAM3Strategy(SegmentationStrategy):
             print(f"Error loading SAM3 model: {e}")
             return None
 
-    def _get_semantic_predictor(self):
+    def _get_semantic_predictor(self, imgsz=1024):
         if self._semantic_predictor is None:
             overrides = dict(
                 conf=0.05,
                 task="segment",
                 mode="predict",
-                imgsz=1024,
+                imgsz=imgsz,
                 model=self._checkpoint_path,
                 device=self._device,
                 verbose=False,
@@ -400,7 +400,8 @@ class SAM3Strategy(SegmentationStrategy):
         return cv2.cvtColor(cvImage, cv2.COLOR_RGB2BGR)
 
     def segment_auto(self, sam, cvImage, saveFileNoExt, formatBinary, **kwargs):
-        predictor = self._get_semantic_predictor()
+        imgsz = kwargs.get("imgsz", 1024)
+        predictor = self._get_semantic_predictor(imgsz=imgsz)
         predictor.set_image(self._to_bgr(cvImage))
         results = predictor(text=["object"])
         masks = self._extract_masks(results)
@@ -435,8 +436,8 @@ class SAM3Strategy(SegmentationStrategy):
         masks = self._extract_masks(results)
         saveMasks(masks, saveFileNoExt, formatBinary)
 
-    def segment_text(self, sam, cvImage, saveFileNoExt, formatBinary, textPrompt):
-        predictor = self._get_semantic_predictor()
+    def segment_text(self, sam, cvImage, saveFileNoExt, formatBinary, textPrompt, imgsz=1024):
+        predictor = self._get_semantic_predictor(imgsz=imgsz)
         predictor.set_image(self._to_bgr(cvImage))
         prompts = [p.strip() for p in textPrompt.split(",") if p.strip()]
         results = predictor(text=prompts)
@@ -515,7 +516,10 @@ def main():
     try:
         if segType == "Auto":
             auto_kwargs = {}
-            if isinstance(strategy, (SAM2Strategy, SAM3Strategy)):
+            if isinstance(strategy, SAM3Strategy):
+                if len(sys.argv) > 8:
+                    auto_kwargs["imgsz"] = int(sys.argv[8])
+            elif isinstance(strategy, SAM2Strategy):
                 if len(sys.argv) > 8:
                     auto_kwargs["segRes"] = sys.argv[8]
                 if len(sys.argv) > 9:
@@ -542,8 +546,9 @@ def main():
             )
         elif segType == "Text":
             textPrompt = sys.argv[8]
+            imgsz = int(sys.argv[9]) if len(sys.argv) > 9 else 1024
             strategy.segment_text(
-                sam, cvImage, saveFileNoExt, formatBinary, textPrompt
+                sam, cvImage, saveFileNoExt, formatBinary, textPrompt, imgsz=imgsz
             )
         else:
             print(f"Unknown segmentation type: {segType}")
