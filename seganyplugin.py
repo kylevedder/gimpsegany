@@ -28,6 +28,7 @@ import glob
 import struct
 import json
 import logging
+import time
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
@@ -508,6 +509,7 @@ def getRandomColor(layerCnt):
 
 def createLayers(image, maskFileNoExt, userSelColor, formatBinary, values):
     width, height = image.get_width(), image.get_height()
+    t_total = time.time()
 
     idx = 0
     maxLayers = 99999
@@ -529,10 +531,17 @@ def createLayers(image, maskFileNoExt, userSelColor, formatBinary, values):
         babl_format = "RGBA u8"
         pix_size = 4
 
+    cumulative_read = 0.0
+    cumulative_pixels = 0.0
+    cumulative_buffer = 0.0
+    cumulative_gimp = 0.0
+
     while idx < maxLayers:
         filepath = maskFileNoExt + str(idx) + ".seg"
         if exists(filepath):
-            print("Creating Layer..", (idx + 1))
+            t_mask = time.time()
+
+            t0 = time.time()
             newlayer = Gimp.Layer.new(
                 image,
                 f"Mask - {values.segType} #{idx + 1}",
@@ -545,16 +554,20 @@ def createLayers(image, maskFileNoExt, userSelColor, formatBinary, values):
             buffer = newlayer.get_buffer()
             image.insert_layer(newlayer, parent, 0)
             newlayer.set_visible(False)
-
             rect = Gegl.Rectangle.new(0, 0, width, height)
+            cumulative_gimp += time.time() - t0
 
+            t0 = time.time()
             maskVals = readMaskFile(filepath, formatBinary)
+            cumulative_read += time.time() - t0
+
             maskColor = (
                 userSelColor
                 if userSelColor is not None
                 else list(uniqueColors[idx]) + [255]
             )
 
+            t0 = time.time()
             mask_color_bytes = bytes(maskColor)
             transparent_pixel = bytes(pix_size)
             row_byte_strings = []
@@ -567,14 +580,23 @@ def createLayers(image, maskFileNoExt, userSelColor, formatBinary, values):
                         row_pixels.append(transparent_pixel)
                 row_byte_strings.append(b"".join(row_pixels))
             pixels = b"".join(row_byte_strings)
+            cumulative_pixels += time.time() - t0
 
+            t0 = time.time()
             buffer.set(rect, babl_format, pixels)
+            newlayer.update(0, 0, width, height)
+            cumulative_buffer += time.time() - t0
 
             idx += 1
-            newlayer.update(0, 0, width, height)
+            logging.debug("Layer %d: %.2fs (read=%.2f, pixels=%.2f, buffer=%.2f, gimp=%.2f)",
+                          idx, time.time() - t_mask,
+                          cumulative_read, cumulative_pixels, cumulative_buffer, cumulative_gimp)
         else:
             break
-    # Gimp.displays_flush()  # turn on only if needed
+
+    elapsed = time.time() - t_total
+    logging.info("createLayers: %d layers in %.2fs — read=%.2fs, pixels=%.2fs, buffer_set=%.2fs, gimp_layer=%.2fs",
+                 idx, elapsed, cumulative_read, cumulative_pixels, cumulative_buffer, cumulative_gimp)
 
     return idx
 
@@ -704,6 +726,7 @@ def run_segmentation(image, values):
         cmd.append(str(values.sam3ImgSize))
         cmd.append(str(values.sam3Conf))
 
+    t0 = time.time()
     newImage = image.duplicate()
     visLayer = newImage.merge_visible_layers(Gimp.MergeType.CLIP_TO_IMAGE)
 
@@ -725,6 +748,7 @@ def run_segmentation(image, values):
     procedure.run(config)
 
     newImage.delete()
+    logging.info("Image export: %.2fs", time.time() - t0)
 
     procedure = Gimp.get_pdb().lookup_procedure("gimp-selection-save")
     config = procedure.create_config()
@@ -753,7 +777,9 @@ def run_segmentation(image, values):
     procedure.run(config)
 
     logging.info("Bridge command: %s", " ".join(cmd))
+    t0 = time.time()
     shellRun(cmd)
+    logging.info("Bridge subprocess: %.2fs", time.time() - t0)
 
     layerMaskColor = None if values.isRandomColor else values.maskColor
     layerCount = createLayers(image, maskFileNoExt, layerMaskColor, formatBinary, values)
