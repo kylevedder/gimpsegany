@@ -93,7 +93,7 @@ def saveMask(filepath, maskArr, formatBinary):
 
 
 def saveMasks(masks, saveFileNoExt, formatBinary):
-    if not masks or len(masks) == 0:
+    if len(masks) == 0:
         logging.warning("No masks to save")
         return
     for i, mask in enumerate(masks):
