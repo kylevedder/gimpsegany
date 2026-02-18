@@ -411,47 +411,62 @@ def shellRun(cmdArgs, stdoutFile=None, env_vars=None, useos=False):
     return True
 
 
-def unpackBoolArray(filepath):
-    with open(filepath, "rb") as file:
-        packed_data = bytearray(file.read())
+def readBinaryMaskAsPixels(filepath, mask_color_bytes, transparent_pixel, pix_size):
+    """Read a binary .seg file and directly produce an RGBA/YA pixel buffer.
 
-    byte_index = 8  # Skip the first 8 bytes for num_rows and num_cols
+    Uses a byte-level lookup table to convert packed bits to pixel data,
+    processing ~8 pixels per iteration instead of one.
+    """
+    with open(filepath, "rb") as f:
+        header = f.read(8)
+        data = f.read()
 
-    num_rows = struct.unpack(">I", packed_data[:4])[0]
-    num_cols = struct.unpack(">I", packed_data[4:8])[0]
+    num_rows = struct.unpack(">I", header[:4])[0]
+    num_cols = struct.unpack(">I", header[4:8])[0]
+    total_bits = num_rows * num_cols
 
-    unpacked_data = []
-    bit_position = 0
+    # Build lookup: each byte value -> 8 pixels of color data
+    lut = []
+    for b in range(256):
+        chunk = bytearray(pix_size * 8)
+        for i in range(8):
+            if (b >> i) & 1:
+                chunk[i * pix_size : (i + 1) * pix_size] = mask_color_bytes
+            # else: already zeroed (transparent)
+        lut.append(bytes(chunk))
 
-    for _ in range(num_rows):
-        unpacked_row = []
-        for _ in range(num_cols):
-            if bit_position == 0:
-                current_byte = packed_data[byte_index]
-                byte_index += 1
+    full_bytes = total_bits // 8
+    remainder = total_bits % 8
 
-            boolean_value = (current_byte >> bit_position) & 1
-            unpacked_row.append(boolean_value)
-            bit_position += 1
+    # Process full bytes via lookup (~3M iterations vs ~24M per-pixel)
+    chunks = [lut[b] for b in data[:full_bytes]]
 
-            if bit_position == 8:
-                bit_position = 0
+    # Handle remainder bits in the last byte
+    if remainder > 0 and len(data) > full_bytes:
+        last_byte = data[full_bytes]
+        chunk = bytearray(pix_size * remainder)
+        for i in range(remainder):
+            if (last_byte >> i) & 1:
+                chunk[i * pix_size : (i + 1) * pix_size] = mask_color_bytes
+        chunks.append(bytes(chunk))
 
-        unpacked_data.append(unpacked_row)
-
-    return unpacked_data
+    return b"".join(chunks), num_rows, num_cols
 
 
-def readMaskFile(filepath, formatBinary):
-    if formatBinary:
-        return unpackBoolArray(filepath)
-    else:
-        mask = []
-        with open(filepath, "r") as f:
-            lines = f.readlines()
-        for line in lines:
-            mask.append([val == "1" for val in line])
-        return mask
+def readTextMaskAsPixels(filepath, mask_color_bytes, transparent_pixel):
+    """Read a text .seg file and produce an RGBA/YA pixel buffer."""
+    with open(filepath, "r") as f:
+        lines = f.readlines()
+    row_byte_strings = []
+    for line in lines:
+        row_pixels = []
+        for ch in line:
+            if ch == "1":
+                row_pixels.append(mask_color_bytes)
+            elif ch == "0":
+                row_pixels.append(transparent_pixel)
+        row_byte_strings.append(b"".join(row_pixels))
+    return b"".join(row_byte_strings)
 
 
 def exportSelection(image, expfile, exportCnt):
@@ -531,8 +546,7 @@ def createLayers(image, maskFileNoExt, userSelColor, formatBinary, values):
         babl_format = "RGBA u8"
         pix_size = 4
 
-    cumulative_read = 0.0
-    cumulative_pixels = 0.0
+    cumulative_read_pixels = 0.0
     cumulative_buffer = 0.0
     cumulative_gimp = 0.0
 
@@ -557,30 +571,24 @@ def createLayers(image, maskFileNoExt, userSelColor, formatBinary, values):
             rect = Gegl.Rectangle.new(0, 0, width, height)
             cumulative_gimp += time.time() - t0
 
-            t0 = time.time()
-            maskVals = readMaskFile(filepath, formatBinary)
-            cumulative_read += time.time() - t0
-
             maskColor = (
                 userSelColor
                 if userSelColor is not None
                 else list(uniqueColors[idx]) + [255]
             )
-
-            t0 = time.time()
             mask_color_bytes = bytes(maskColor)
             transparent_pixel = bytes(pix_size)
-            row_byte_strings = []
-            for row in maskVals:
-                row_pixels = []
-                for p in row:
-                    if p:
-                        row_pixels.append(mask_color_bytes)
-                    else:
-                        row_pixels.append(transparent_pixel)
-                row_byte_strings.append(b"".join(row_pixels))
-            pixels = b"".join(row_byte_strings)
-            cumulative_pixels += time.time() - t0
+
+            t0 = time.time()
+            if formatBinary:
+                pixels, _, _ = readBinaryMaskAsPixels(
+                    filepath, mask_color_bytes, transparent_pixel, pix_size
+                )
+            else:
+                pixels = readTextMaskAsPixels(
+                    filepath, mask_color_bytes, transparent_pixel
+                )
+            cumulative_read_pixels += time.time() - t0
 
             t0 = time.time()
             buffer.set(rect, babl_format, pixels)
@@ -588,15 +596,15 @@ def createLayers(image, maskFileNoExt, userSelColor, formatBinary, values):
             cumulative_buffer += time.time() - t0
 
             idx += 1
-            logging.debug("Layer %d: %.2fs (read=%.2f, pixels=%.2f, buffer=%.2f, gimp=%.2f)",
+            logging.debug("Layer %d: %.2fs (read+pixels=%.2f, buffer=%.2f, gimp=%.2f)",
                           idx, time.time() - t_mask,
-                          cumulative_read, cumulative_pixels, cumulative_buffer, cumulative_gimp)
+                          cumulative_read_pixels, cumulative_buffer, cumulative_gimp)
         else:
             break
 
     elapsed = time.time() - t_total
-    logging.info("createLayers: %d layers in %.2fs — read=%.2fs, pixels=%.2fs, buffer_set=%.2fs, gimp_layer=%.2fs",
-                 idx, elapsed, cumulative_read, cumulative_pixels, cumulative_buffer, cumulative_gimp)
+    logging.info("createLayers: %d layers in %.2fs — read+pixels=%.2fs, buffer_set=%.2fs, gimp_layer=%.2fs",
+                 idx, elapsed, cumulative_read_pixels, cumulative_buffer, cumulative_gimp)
 
     return idx
 
@@ -738,7 +746,7 @@ def run_segmentation(image, values):
     gfile = Gio.File.new_for_path(ipFilePath)
     config.set_property("file", gfile)
     config.set_property("interlaced", False)
-    config.set_property("compression", 9)
+    config.set_property("compression", 1)
     config.set_property("bkgd", False)
     config.set_property("offs", False)
     config.set_property("phys", False)
