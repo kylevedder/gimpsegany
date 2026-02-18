@@ -44,7 +44,7 @@ from segment_anything import (
 )
 
 SAM3_DEFAULT_IMGSZ = 1036
-SAM3_DEFAULT_CONF = 0.05
+SAM3_DEFAULT_CONF = 0.2
 MAX_INPUT_DIM = 2048
 
 _orig_image_size = None  # (h, w) set by main() if image was downscaled

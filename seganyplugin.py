@@ -51,7 +51,7 @@ class DialogValue:
         self.minMaskArea = 0
         self.textPrompt = ""
         self.sam3ImgSize = 1036
-        self.sam3Conf = 0.05
+        self.sam3Conf = 0.2
 
         try:
             with open(filepath, "r") as f:
