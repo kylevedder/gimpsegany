@@ -43,6 +43,9 @@ from segment_anything import (
 )
 
 SAM3_DEFAULT_IMGSZ = 1036
+MAX_INPUT_DIM = 2048
+
+_orig_image_size = None  # (h, w) set by main() if image was downscaled
 
 # SAM3 imports (via ultralytics, which includes MPS support)
 try:
@@ -97,8 +100,16 @@ def saveMasks(masks, saveFileNoExt, formatBinary):
         logging.warning("No masks to save")
         return
     for i, mask in enumerate(masks):
+        mask = np.array(mask)
+        if _orig_image_size is not None:
+            orig_h, orig_w = _orig_image_size
+            mask = cv2.resize(
+                mask.astype(np.uint8),
+                (orig_w, orig_h),
+                interpolation=cv2.INTER_NEAREST,
+            )
         filepath = saveFileNoExt + str(i) + ".seg"
-        h, w = len(mask), len(mask[0]) if len(mask) > 0 else 0
+        h, w = mask.shape[:2]
         logging.info(f"Saving mask {i}: {w}x{h} -> {filepath}")
         arr = [[val for val in row] for row in mask]
         saveMask(filepath, arr, formatBinary)
@@ -558,6 +569,15 @@ def main():
     cvImage = cv2.cvtColor(cvImage, cv2.COLOR_BGR2RGB)
     h, w = cvImage.shape[:2]
     logging.info(f"Input image: {ipFile} ({w}x{h})")
+
+    global _orig_image_size
+    if max(h, w) > MAX_INPUT_DIM:
+        scale = MAX_INPUT_DIM / max(h, w)
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        _orig_image_size = (h, w)
+        cvImage = cv2.resize(cvImage, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        logging.info(f"Downscaled to {new_w}x{new_h} (masks will be upscaled back to {w}x{h})")
 
     try:
         if segType == "Auto":
