@@ -379,12 +379,14 @@ class SAM3Strategy(SegmentationStrategy):
     def _get_semantic_predictor(self):
         if self._semantic_predictor is None:
             overrides = dict(
-                conf=0.25,
+                conf=0.05,
                 task="segment",
                 mode="predict",
+                imgsz=1024,
                 model=self._checkpoint_path,
                 device=self._device,
                 verbose=False,
+                save=False,
             )
             self._semantic_predictor = SAM3SemanticPredictor(overrides=overrides)
         return self._semantic_predictor
