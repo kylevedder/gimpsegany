@@ -12,7 +12,7 @@ Download the zip file and follow the installation instructions below.
 
 This GIMP plugin integrates with Meta's AI-based tool Segment Anything, which enables you to effortlessly isolate objects within raster images directly from GIMP.
 
-This project provides a plugin that supports both **Segment Anything 1 (SAM1)** and **Segment Anything 2 (SAM2)**.
+This project provides a plugin that supports **Segment Anything 1 (SAM1)**, **Segment Anything 2 (SAM2)**, and **Segment Anything 3 (SAM3)**. SAM3 adds open-vocabulary text-based segmentation — describe what you want to segment in plain text.
 
 ---
 
@@ -34,7 +34,25 @@ After extracting, ensure the plugin script is executable (on Linux and macOS).
 
 ### Segment Anything Backend Installation
 
-You need to install the backend for the Segment Anything model you want to use. The plugin can use either SAM1 or SAM2.
+You need to install the backend for the Segment Anything model you want to use. The plugin can use SAM1, SAM2, or SAM3.
+
+#### Segment Anything 3 (SAM3) Installation
+
+SAM3 is supported via [Ultralytics](https://github.com/ultralytics/ultralytics), which provides MPS support for Apple Silicon Macs.
+
+**Prerequisites:**
+
+- Python 3.12 or higher
+- PyTorch 2.7 or higher
+
+**Installation Steps:**
+
+1. Install ultralytics and the CLIP text encoder:
+   ```bash
+   pip install ultralytics
+   pip install "git+https://github.com/ultralytics/CLIP.git"
+   ```
+2. Download the SAM3 model checkpoint (`sam3.pt`) from the [SAM3 Hugging Face repo](https://huggingface.co/facebook/sam3) (requires access request approval).
 
 #### Segment Anything 2 (SAM2) Installation
 
@@ -79,6 +97,12 @@ You will get the detailed installation instructions about installing Segment Any
 
 Perform a quick check to ensure your Segment Anything installation is working properly. Open a console and change directory to your GIMP plugin folder.
 
+**For SAM3 model:**
+
+```
+/path/to/python3/python ./seganybridge.py auto /path/to/checkpoint/model/sam3.pt
+```
+
 **For SAM2 model:**
 
 ```
@@ -107,12 +131,14 @@ A "Success!!" message indicates a successful installation.
 ### Options
 
 - **Python3 Path:** The path to the python3 instance used while running the seganybridge script.
-- **Model Type:** The type of the Segment Anything model to use. Can be set to `Auto` to infer from the checkpoint filename (`sam_` prefix for SAM1, `sam2` for SAM2).
+- **Model Type:** The type of the Segment Anything model to use. Can be set to `Auto` to infer from the checkpoint filename (`sam_` prefix for SAM1, `sam2` for SAM2, `sam3` for SAM3).
 - **Checkpoint Path:** The path to the downloaded Segment Anything model checkpoint file (`.pth` or `.safetensors`).
 - **Segmentation Type:** The method to be used for segmentation.
   - **Auto:** Automatically segments the entire image.
   - **Box:** Segments objects within a user-drawn rectangular selection.
   - **Selection:** Segments objects based on sample points from a user-drawn selection.
+  - **Text (SAM3 only):** Segments objects matching a text description (e.g., "person", "car, dog"). Comma-separated prompts segment multiple object types.
+- **Text Prompt:** The text description of objects to segment. Visible when Segmentation Type is set to "Text".
 - **Mask Type:**
   - **Multiple:** Creates a separate layer for each potential object.
   - **Single:** Creates a single layer with the mask that has the highest AI probability.
