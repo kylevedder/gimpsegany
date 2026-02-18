@@ -40,6 +40,8 @@ from segment_anything import (
     SamPredictor,
 )
 
+SAM3_DEFAULT_IMGSZ = 1036
+
 # SAM3 imports (via ultralytics, which includes MPS support)
 try:
     from ultralytics import SAM as UltralyticsSAM
@@ -376,7 +378,7 @@ class SAM3Strategy(SegmentationStrategy):
             print(f"Error loading SAM3 model: {e}")
             return None
 
-    def _get_semantic_predictor(self, imgsz=1024):
+    def _get_semantic_predictor(self, imgsz=SAM3_DEFAULT_IMGSZ):
         if self._semantic_predictor is None:
             overrides = dict(
                 conf=0.05,
@@ -400,7 +402,7 @@ class SAM3Strategy(SegmentationStrategy):
         return cv2.cvtColor(cvImage, cv2.COLOR_RGB2BGR)
 
     def segment_auto(self, sam, cvImage, saveFileNoExt, formatBinary, **kwargs):
-        imgsz = kwargs.get("imgsz", 1024)
+        imgsz = kwargs.get("imgsz", SAM3_DEFAULT_IMGSZ)
         predictor = self._get_semantic_predictor(imgsz=imgsz)
         predictor.set_image(self._to_bgr(cvImage))
         results = predictor(text=["object"])
@@ -412,6 +414,7 @@ class SAM3Strategy(SegmentationStrategy):
             source=self._to_bgr(cvImage),
             bboxes=boxCos,
             device=self._device,
+            imgsz=SAM3_DEFAULT_IMGSZ,
             verbose=False,
         )
         masks = self._extract_masks(results)
@@ -431,12 +434,13 @@ class SAM3Strategy(SegmentationStrategy):
             points=pts,
             labels=[1] * len(pts),
             device=self._device,
+            imgsz=SAM3_DEFAULT_IMGSZ,
             verbose=False,
         )
         masks = self._extract_masks(results)
         saveMasks(masks, saveFileNoExt, formatBinary)
 
-    def segment_text(self, sam, cvImage, saveFileNoExt, formatBinary, textPrompt, imgsz=1024):
+    def segment_text(self, sam, cvImage, saveFileNoExt, formatBinary, textPrompt, imgsz=SAM3_DEFAULT_IMGSZ):
         predictor = self._get_semantic_predictor(imgsz=imgsz)
         predictor.set_image(self._to_bgr(cvImage))
         prompts = [p.strip() for p in textPrompt.split(",") if p.strip()]
@@ -447,7 +451,8 @@ class SAM3Strategy(SegmentationStrategy):
     def run_test(self, sam):
         npArr = np.zeros((50, 50, 3), np.uint8)
         sam.predict(
-            source=npArr, bboxes=[10, 10, 20, 20], device=self._device, verbose=False
+            source=npArr, bboxes=[10, 10, 20, 20], device=self._device,
+            imgsz=SAM3_DEFAULT_IMGSZ, verbose=False,
         )
 
 
@@ -546,7 +551,7 @@ def main():
             )
         elif segType == "Text":
             textPrompt = sys.argv[8]
-            imgsz = int(sys.argv[9]) if len(sys.argv) > 9 else 1024
+            imgsz = int(sys.argv[9]) if len(sys.argv) > 9 else SAM3_DEFAULT_IMGSZ
             strategy.segment_text(
                 sam, cvImage, saveFileNoExt, formatBinary, textPrompt, imgsz=imgsz
             )
