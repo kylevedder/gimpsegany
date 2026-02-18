@@ -44,6 +44,7 @@ from segment_anything import (
 )
 
 SAM3_DEFAULT_IMGSZ = 1036
+SAM3_DEFAULT_CONF = 0.05
 MAX_INPUT_DIM = 2048
 
 _orig_image_size = None  # (h, w) set by main() if image was downscaled
@@ -386,10 +387,10 @@ class SAM3Strategy(SegmentationStrategy):
             print(f"Error loading SAM3 model: {e}")
             return None
 
-    def _get_semantic_predictor(self, imgsz=SAM3_DEFAULT_IMGSZ):
+    def _get_semantic_predictor(self, imgsz=SAM3_DEFAULT_IMGSZ, conf=SAM3_DEFAULT_CONF):
         if self._semantic_predictor is None:
             overrides = dict(
-                conf=0.05,
+                conf=conf,
                 task="segment",
                 mode="predict",
                 imgsz=imgsz,
@@ -409,11 +410,11 @@ class SAM3Strategy(SegmentationStrategy):
     def _to_bgr(self, cvImage):
         return cv2.cvtColor(cvImage, cv2.COLOR_RGB2BGR)
 
-    def segment_auto(self, sam, cvImage, saveFileNoExt, formatBinary, imgsz=SAM3_DEFAULT_IMGSZ, **kwargs):
+    def segment_auto(self, sam, cvImage, saveFileNoExt, formatBinary, imgsz=SAM3_DEFAULT_IMGSZ, conf=SAM3_DEFAULT_CONF, **kwargs):
         h, w = cvImage.shape[:2]
-        logging.info(f"SAM3 Auto: image={w}x{h}, imgsz={imgsz}")
+        logging.info(f"SAM3 Auto: image={w}x{h}, imgsz={imgsz}, conf={conf}")
         t0 = time.time()
-        predictor = self._get_semantic_predictor(imgsz=imgsz)
+        predictor = self._get_semantic_predictor(imgsz=imgsz, conf=conf)
         predictor.set_image(self._to_bgr(cvImage))
         results = predictor(text=["object"])
         elapsed = time.time() - t0
@@ -462,12 +463,12 @@ class SAM3Strategy(SegmentationStrategy):
         logging.info(f"SAM3 Selection: {len(masks)} mask(s) in {elapsed:.2f}s")
         saveMasks(masks, saveFileNoExt, formatBinary)
 
-    def segment_text(self, sam, cvImage, saveFileNoExt, formatBinary, textPrompt, imgsz=SAM3_DEFAULT_IMGSZ):
+    def segment_text(self, sam, cvImage, saveFileNoExt, formatBinary, textPrompt, imgsz=SAM3_DEFAULT_IMGSZ, conf=SAM3_DEFAULT_CONF):
         prompts = [p.strip() for p in textPrompt.split(",") if p.strip()]
         h, w = cvImage.shape[:2]
-        logging.info(f"SAM3 Text: image={w}x{h}, imgsz={imgsz}, prompts={prompts}")
+        logging.info(f"SAM3 Text: image={w}x{h}, imgsz={imgsz}, conf={conf}, prompts={prompts}")
         t0 = time.time()
-        predictor = self._get_semantic_predictor(imgsz=imgsz)
+        predictor = self._get_semantic_predictor(imgsz=imgsz, conf=conf)
         predictor.set_image(self._to_bgr(cvImage))
         results = predictor(text=prompts)
         elapsed = time.time() - t0
@@ -569,9 +570,12 @@ def main():
         if segType == "Auto":
             auto_kwargs = {}
             imgsz = SAM3_DEFAULT_IMGSZ
+            conf = SAM3_DEFAULT_CONF
             if isinstance(strategy, SAM3Strategy):
                 if len(sys.argv) > 8:
                     imgsz = int(sys.argv[8])
+                if len(sys.argv) > 9:
+                    conf = float(sys.argv[9])
             elif isinstance(strategy, SAM2Strategy):
                 if len(sys.argv) > 8:
                     auto_kwargs["segRes"] = sys.argv[8]
@@ -580,7 +584,7 @@ def main():
                 if len(sys.argv) > 10:
                     auto_kwargs["minMaskArea"] = int(sys.argv[10])
             strategy.segment_auto(
-                sam, cvImage, saveFileNoExt, formatBinary, imgsz, **auto_kwargs
+                sam, cvImage, saveFileNoExt, formatBinary, imgsz, conf, **auto_kwargs
             )
         elif segType in {"Selection", "Box-Selection"}:
             selFile = sys.argv[8]
@@ -600,8 +604,9 @@ def main():
         elif segType == "Text":
             textPrompt = sys.argv[8]
             imgsz = int(sys.argv[9]) if len(sys.argv) > 9 else SAM3_DEFAULT_IMGSZ
+            conf = float(sys.argv[10]) if len(sys.argv) > 10 else SAM3_DEFAULT_CONF
             strategy.segment_text(
-                sam, cvImage, saveFileNoExt, formatBinary, textPrompt, imgsz
+                sam, cvImage, saveFileNoExt, formatBinary, textPrompt, imgsz, conf
             )
         else:
             print(f"Unknown segmentation type: {segType}")
