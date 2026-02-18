@@ -28,6 +28,7 @@ import cv2
 import sys
 import os
 import time
+import struct
 import logging
 
 # SAM2 imports
@@ -58,62 +59,47 @@ except ImportError:
 # --- Utility Functions ---
 
 
-def packBoolArray(filepath, arr):
-    packed_data = bytearray()
-    num_rows = len(arr)
-    num_cols = len(arr[0])
-    packed_data.extend(
-        [num_rows >> 24, (num_rows >> 16) & 255, (num_rows >> 8) & 255, num_rows & 255]
-    )
-    packed_data.extend(
-        [num_cols >> 24, (num_cols >> 16) & 255, (num_cols >> 8) & 255, num_cols & 255]
-    )
-    current_byte = 0
-    bit_position = 0
-    for row in arr:
-        for boolean_value in row:
-            if boolean_value:
-                current_byte |= 1 << bit_position
-            bit_position += 1
-            if bit_position == 8:
-                packed_data.append(current_byte)
-                current_byte = 0
-                bit_position = 0
-    if bit_position > 0:
-        packed_data.append(current_byte)
+def saveMaskBinary(filepath, mask):
+    """Pack a 2D boolean/uint8 numpy array to the binary .seg format."""
+    num_rows, num_cols = mask.shape
+    header = struct.pack(">II", num_rows, num_cols)
+    flat = mask.flatten().astype(np.uint8)
+    packed = np.packbits(flat, bitorder="little")
     with open(filepath, "wb") as f:
-        f.write(packed_data)
-    return packed_data
+        f.write(header)
+        f.write(packed.tobytes())
 
 
-def saveMask(filepath, maskArr, formatBinary):
-    if formatBinary:
-        packBoolArray(filepath, maskArr)
-    else:
-        with open(filepath, "w") as f:
-            for row in maskArr:
-                f.write("".join(str(int(val)) for val in row) + "\n")
+def saveMaskText(filepath, mask):
+    """Write a 2D boolean/uint8 numpy array as text .seg format."""
+    with open(filepath, "w") as f:
+        for row in mask:
+            f.write("".join(str(int(val)) for val in row) + "\n")
 
 
 def saveMasks(masks, saveFileNoExt, formatBinary):
     if len(masks) == 0:
         logging.warning("No masks to save")
         return
+    t0 = time.time()
     for i, mask in enumerate(masks):
-        mask = np.array(mask)
+        mask = np.asarray(mask, dtype=np.uint8)
         if _orig_image_size is not None:
             orig_h, orig_w = _orig_image_size
             mask = cv2.resize(
-                mask.astype(np.uint8),
+                mask,
                 (orig_w, orig_h),
                 interpolation=cv2.INTER_NEAREST,
             )
         filepath = saveFileNoExt + str(i) + ".seg"
         h, w = mask.shape[:2]
         logging.info(f"Saving mask {i}: {w}x{h} -> {filepath}")
-        arr = [[val for val in row] for row in mask]
-        saveMask(filepath, arr, formatBinary)
-    logging.info(f"Saved {len(masks)} mask(s) total")
+        if formatBinary:
+            saveMaskBinary(filepath, mask)
+        else:
+            saveMaskText(filepath, mask)
+    elapsed = time.time() - t0
+    logging.info(f"Saved {len(masks)} mask(s) in {elapsed:.2f}s")
 
 
 # --- Strategy Pattern Implementation ---
